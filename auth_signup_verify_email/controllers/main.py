@@ -2,27 +2,33 @@
 # License AGPL-3.0 or later (http://www.gnu.org/licenses/agpl.html).
 
 import logging
-
-from email_validator import EmailSyntaxError, EmailUndeliverableError, validate_email
-
+from email_validator import validate_email, EmailSyntaxError, \
+    EmailUndeliverableError
 from odoo import _
 from odoo.http import request, route
-
 from odoo.addons.auth_signup.controllers.main import AuthSignupHome
 
 _logger = logging.getLogger(__name__)
 
 
 class SignupVerifyEmail(AuthSignupHome):
+
     @route()
     def web_auth_signup(self, *args, **kw):
-        if request.params.get("login") and not request.params.get("password"):
+        if (request.params.get("login") and not
+                request.params.get("password")):
             return self.passwordless_signup()
         return super().web_auth_signup(*args, **kw)
 
     def passwordless_signup(self):
         values = request.params
         qcontext = self.get_auth_signup_qcontext()
+
+        if 'error' in qcontext and request.httprequest.method == 'POST':
+            # Stop and show error if error was detected in qcontext
+            # This is required to be compatible with other modules, that
+            # override qcontext to add some pre-processing of signup
+            return request.render("auth_signup.signup", qcontext)
 
         # Check good format of e-mail
         try:
@@ -44,15 +50,12 @@ class SignupVerifyEmail(AuthSignupHome):
             values["email"] = values.get("login")
 
         # preserve user lang
-        values["lang"] = request.context.get("lang", "")
-
-        # remove values that could raise "Invalid field '*' on model 'res.users'"
-        values.pop("redirect", "")
-        values.pop("token", "")
+        values['lang'] = request.lang
 
         # Remove password
         values["password"] = ""
-        sudo_users = request.env["res.users"].with_context(create_user=True).sudo()
+        sudo_users = (request.env["res.users"]
+                      .with_context(create_user=True).sudo())
 
         try:
             with request.cr.savepoint():
@@ -61,19 +64,16 @@ class SignupVerifyEmail(AuthSignupHome):
         except Exception as error:
             # Duplicate key or wrong SMTP settings, probably
             _logger.exception(error)
-            if (
-                request.env["res.users"]
-                .sudo()
-                .search([("login", "=", qcontext.get("login"))])
-            ):
+            if request.env["res.users"].sudo().search(
+               [("login", "=", qcontext.get("login"))]):
                 qcontext["error"] = _(
-                    "Another user is already registered using this email" " address."
-                )
+                    "Another user is already registered using this email"
+                    " address.")
             else:
                 # Agnostic message for security
                 qcontext["error"] = _(
-                    "Something went wrong, please try again later or" " contact us."
-                )
+                    "Something went wrong, please try again later or"
+                    " contact us.")
             return request.render("auth_signup.signup", qcontext)
 
         qcontext["message"] = _("Check your email to activate your account!")

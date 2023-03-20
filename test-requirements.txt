@@ -1,1 +1,2 @@
-pyjwt[cryptography]
+# auth_oidc tests
+responses

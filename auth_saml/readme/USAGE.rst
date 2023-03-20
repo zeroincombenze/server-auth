@@ -1,1 +1,2 @@
-Users can login with the configured SAML IdP with buttons added in the login screen.
+#. Configure it (see corresponding section in README)
+#. Just login with your SAML-provided password.

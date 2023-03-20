@@ -7,7 +7,7 @@ import hashlib
 import logging
 import secrets
 
-from werkzeug.urls import url_decode, url_encode
+import werkzeug.utils
 
 from odoo.addons.auth_oauth.controllers.main import OAuthLogin
 
@@ -20,7 +20,7 @@ class OpenIDLogin(OAuthLogin):
         for provider in providers:
             flow = provider.get("flow")
             if flow in ("id_token", "id_token_code"):
-                params = url_decode(provider["auth_link"].split("?")[-1])
+                params = werkzeug.url_decode(provider["auth_link"].split("?")[-1])
                 # nonce
                 params["nonce"] = secrets.token_urlsafe()
                 # response_type
@@ -45,6 +45,6 @@ class OpenIDLogin(OAuthLogin):
                     params["scope"] = provider["scope"]
                 # auth link that the user will click
                 provider["auth_link"] = "{}?{}".format(
-                    provider["auth_endpoint"], url_encode(params)
+                    provider["auth_endpoint"], werkzeug.url_encode(params)
                 )
         return providers

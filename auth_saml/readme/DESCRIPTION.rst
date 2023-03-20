@@ -1,4 +1,4 @@
-Let users log into Odoo via an SAML2 identity provider.
+Let users log into Odoo via an SAML2 provider.
 
 This module allows to deport the management of users and passwords in an
 external authentication system to provide SSO functionality (Single Sign On)

@@ -1,19 +1,24 @@
 # Copyright 2018 ACSONE SA/NV
 # License LGPL-3.0 or later (http://www.gnu.org/licenses/lgpl).
+import uuid
 
-from odoo import _, api, fields, models, tools
-from odoo.exceptions import AccessError, ValidationError
+from odoo import api, fields, models, tools, _
 from odoo.tools import consteq
+from odoo.exceptions import ValidationError, AccessError
 
 
 class AuthApiKey(models.Model):
     _name = "auth.api.key"
     _description = "API Key"
 
+    def _default_key(self):
+        return uuid.uuid4()
+
     name = fields.Char(required=True)
     key = fields.Char(
         required=True,
-        help="""The API key. Enter a dummy value in this field if it is
+        default=lambda self: self._default_key(),
+        help="""The API key. Keep the default value in this field if it is
         obtained from the server environment configuration.""",
     )
     user_id = fields.Many2one(
@@ -24,7 +29,9 @@ class AuthApiKey(models.Model):
         the api key""",
     )
 
-    _sql_constraints = [("name_uniq", "unique(name)", "Api Key name must be unique.")]
+    _sql_constraints = [
+        ("name_uniq", "unique(name)", "Api Key name must be unique.")
+    ]
 
     @api.model
     def _retrieve_api_key(self, key):
@@ -36,7 +43,7 @@ class AuthApiKey(models.Model):
         if not self.env.user.has_group("base.group_system"):
             raise AccessError(_("User is not allowed"))
         for api_key in self.search([]):
-            if api_key.key and consteq(key, api_key.key):
+            if consteq(key, api_key.key):
                 return api_key.id
         raise ValidationError(_("The key %s is not allowed") % key)
 
