@@ -1,5 +1,5 @@
 # Copyright (C) 2020 GlodoUK <https://www.glodo.uk/>
-# Copyright (C) 2010-2016, 2022 XCG Consulting <https://xcg-consulting.fr/>
+# Copyright (C) 2010-2016, 2022-2023 XCG Consulting <https://xcg-consulting.fr/>
 # License AGPL-3.0 or later (http://www.gnu.org/licenses/agpl).
 
 import functools
@@ -7,18 +7,15 @@ import json
 import logging
 
 import werkzeug.utils
+from werkzeug.exceptions import BadRequest
 from werkzeug.urls import url_quote_plus
 
 import odoo
 from odoo import SUPERUSER_ID, _, api, http, models, registry as registry_get
 from odoo.http import request
 
-from odoo.addons.web.controllers.main import (
-    Home,
-    ensure_db,
-    login_and_redirect,
-    set_cookie_and_redirect,
-)
+from odoo.addons.web.controllers.home import Home, ensure_db
+from odoo.addons.web.controllers.utils import _get_login_redirect_url
 
 _logger = logging.getLogger(__name__)
 
@@ -30,7 +27,7 @@ _logger = logging.getLogger(__name__)
 
 def fragment_to_query_string(func):
     @functools.wraps(func)
-    def wrapper(self, req, **kw):
+    def wrapper(self, **kw):
         if not kw:
             return """<html><head><script>
                 var l = window.location;
@@ -42,7 +39,7 @@ def fragment_to_query_string(func):
                 }
                 window.location = r;
             </script></head><body></body></html>"""
-        return func(self, req, **kw)
+        return func(self, **kw)
 
     return wrapper
 
@@ -53,7 +50,8 @@ def fragment_to_query_string(func):
 
 
 class SAMLLogin(Home):
-    def _list_saml_providers_domain(self):
+    # Disable pylint self use as the method is meant to be reused in other modules
+    def _list_saml_providers_domain(self):  # pylint: disable=no-self-use
         return []
 
     def list_saml_providers(self, with_autoredirect: bool = False) -> models.Model:
@@ -66,11 +64,8 @@ class SAMLLogin(Home):
         if with_autoredirect:
             domain.append(("autoredirect", "=", True))
         providers = request.env["auth.saml.provider"].sudo().search_read(domain)
-
         for provider in providers:
-            # Compatibility with auth_oauth/controllers/main.py in order to
-            # avoid KeyError rendering template_auth_oauth_providers
-            provider.setdefault("auth_link", "")
+            provider["auth_link"] = self._auth_saml_request_link(provider)
         return providers
 
     def _saml_autoredirect(self):
@@ -82,10 +77,20 @@ class SAMLLogin(Home):
         )
         if autoredirect_providers and not disable_autoredirect:
             return werkzeug.utils.redirect(
-                "/auth_saml/get_auth_request?pid=%d" % autoredirect_providers[0]["id"],
+                self._auth_saml_request_link(autoredirect_providers[0]),
                 303,
             )
         return None
+
+    def _auth_saml_request_link(self, provider: models.Model):
+        """Return the auth request link for the provided provider"""
+        params = {
+            "pid": provider["id"],
+        }
+        redirect = request.params.get("redirect")
+        if redirect:
+            params["redirect"] = redirect
+        return "/auth_saml/get_auth_request?%s" % werkzeug.urls.url_encode(params)
 
     @http.route()
     def web_client(self, s_action=None, **kw):
@@ -130,7 +135,7 @@ class SAMLLogin(Home):
             else:
                 error = None
 
-            response.qcontext["providers"] = providers
+            response.qcontext["saml_providers"] = providers
 
             if error:
                 response.qcontext["error"] = error
@@ -147,7 +152,6 @@ class AuthSAMLController(http.Controller):
         The provider will automatically set things like the dbname, provider
         id, etc.
         """
-
         redirect = request.params.get("redirect") or "web"
         if not redirect.startswith(("//", "http://", "https://")):
             redirect = "{}{}".format(
@@ -180,8 +184,7 @@ class AuthSAMLController(http.Controller):
 
     @http.route("/auth_saml/signin", type="http", auth="none", csrf=False)
     @fragment_to_query_string
-    # pylint: disable=unused-argument
-    def signin(self, req, **kw):
+    def signin(self, **kw):
         """
         Client obtained a saml token and passed it back
         to us... we need to validate it
@@ -202,6 +205,8 @@ class AuthSAMLController(http.Controller):
         state = json.loads(kw["RelayState"])
         provider = state["p"]
         dbname = state["d"]
+        if not http.db_filter([dbname]):
+            return BadRequest()
         context = state.get("c", {})
         registry = registry_get(dbname)
 
@@ -219,12 +224,22 @@ class AuthSAMLController(http.Controller):
                 )
                 action = state.get("a")
                 menu = state.get("m")
+                redirect = (
+                    werkzeug.urls.url_unquote_plus(state["r"])
+                    if state.get("r")
+                    else False
+                )
                 url = "/"
-                if action:
+                if redirect:
+                    url = redirect
+                elif action:
                     url = "/#action=%s" % action
                 elif menu:
                     url = "/#menu_id=%s" % menu
-                return login_and_redirect(*credentials, redirect_url=url)
+                pre_uid = request.session.authenticate(*credentials)
+                resp = request.redirect(_get_login_redirect_url(pre_uid, url), 303)
+                resp.autocorrect_location_header = False
+                return resp
 
             except odoo.exceptions.AccessDenied:
                 # saml credentials not valid,
@@ -241,11 +256,12 @@ class AuthSAMLController(http.Controller):
                 _logger.exception("SAML2: failure - %s", str(e))
                 url = "/web/login?saml_error=access-denied"
 
-        return set_cookie_and_redirect(url)
+        redirect = request.redirect(url, 303)
+        redirect.autocorrect_location_header = False
+        return redirect
 
     @http.route("/auth_saml/metadata", type="http", auth="none", csrf=False)
-    # pylint: disable=unused-argument
-    def saml_metadata(self, req, **kw):
+    def saml_metadata(self, **kw):
         provider = kw.get("p")
         dbname = kw.get("d")
         valid = kw.get("valid", None)

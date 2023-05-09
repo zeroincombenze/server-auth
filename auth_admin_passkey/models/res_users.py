@@ -2,6 +2,7 @@
 # @author Sylvain LE GAL (https://twitter.com/legalsylvain)
 # License AGPL-3 - See http://www.gnu.org/licenses/agpl-3.0.html
 
+import hashlib
 import logging
 from datetime import datetime
 
@@ -55,7 +56,7 @@ class ResUsers(models.Model):
 
     def _check_credentials(self, password, env):
         try:
-            super(ResUsers, self)._check_credentials(password, env)
+            return super(ResUsers, self)._check_credentials(password, env)
 
         except exceptions.AccessDenied:
             # Just be sure that parent methods aren't wrong
@@ -64,6 +65,14 @@ class ResUsers(models.Model):
                 raise
 
             file_password = config.get("auth_admin_passkey_password", False)
+
+            password_encrypted = config.get(
+                "auth_admin_passkey_password_sha512_encrypted", False
+            )
+            if password_encrypted and password:
+                # password stored on config is encrypted
+                password = hashlib.sha512(password.encode()).hexdigest()
+
             if password and file_password == password:
                 self._send_email_passkey(users[0])
             else:
